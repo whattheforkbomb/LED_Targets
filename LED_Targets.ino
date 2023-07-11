@@ -47,11 +47,11 @@ struct LED
   int B; // HIGH or LOW
 };
 
-struct LED White = {HIGH, HIGH, HIGH};
-struct LED Red = {HIGH, LOW, LOW};
-struct LED Green = {LOW, HIGH, LOW};
-struct LED Blue = {LOW, LOW, HIGH};
-struct LED Off = {LOW, LOW, LOW};
+struct LED White = {LOW, LOW, LOW};
+struct LED Red = {LOW, HIGH, HIGH};
+struct LED Green = {HIGH, LOW, HIGH};
+struct LED Blue = {HIGH, HIGH, LOW};
+struct LED Off = {HIGH, HIGH, HIGH};
 
 
 /* control bitmasks:
@@ -81,9 +81,9 @@ struct LED Off = {LOW, LOW, LOW};
 void toggle_active_row(int active_row) {
   for (int row = 0; row < 3; row++) {
     if (row == active_row) {
-      digitalWrite(rowPins[row], LOW);
-    } else {
       digitalWrite(rowPins[row], HIGH);
+    } else {
+      digitalWrite(rowPins[row], LOW);
     }
   }
 }
