@@ -1,58 +1,92 @@
+// #include <Key.h>
+#include <Keypad.h>
+
 // #include <Keypad.h>
 const byte ROWS = 4; //four rows
 const byte COLS = 4; //four columns
 char keys[ROWS][COLS] = {
-  {'1','2','3'},//,'A'},
-  {'4','5','6'},//,'B'},
-  {'7','8','9'}//,'C'},
-  // {'*','0','#','D'}
+  {'1','2','3','A'},
+  {'4','5','6','B'},
+  {'7','8','9','C'},
+  {'*','0','#','D'}
 };
-byte target_number = 10;
 
-// byte rowPins[ROWS] = {7, 6, 5};//, 6}; //connect to the row pinouts of the keypad
-// byte colPins[COLS] = {4, 3, 2};//, 2}; //connect to the column pinouts of the keypad
+
+// Shift Register
+//Setting the pin connections for the data pins on the shift registers.
+int data1 = 3;
+//setting the pins that the clock pins are connected to.
+int clock1 = 4;
+//setting the pins that the latch pins are connected to.
+int latch1 = 2;
+
+byte rowPins[ROWS] = {12, 11, 10, 9}; //connect to the row pinouts of the keypad
+byte colPins[COLS] = {8, 7, 6, 5}; //connect to the column pinouts of the keypad
 
 //Create an object of keypad
-// Keypad keypad = Keypad( makeKeymap(keys), rowPins, colPins, ROWS, COLS );
+Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
-byte rowPins[] = {4, 3, 2};
-byte colPins[] = {5, 6, 7, 8, 9, 10};
+ //clearing the shift registers.
+ void clearRegisters(){
+  digitalWrite(data1, 0);
+  digitalWrite(clock1, 0);
+ }
 
-void setup(){
-  Serial.begin(9600);
+ void shift_out(int latchPin, int dataPin, int clockPin, int mask) {
+  //internal function setup
+  //clear everything out just in case to
+  //prepare shift register for bit shifting
+  digitalWrite(latchPin, 0);
+  digitalWrite(dataPin, 0);
+  digitalWrite(clockPin, 0);
 
-  // Output to control LED
-  pinMode(2, OUTPUT);
-  pinMode(3, OUTPUT);
-  pinMode(4, OUTPUT);
-  pinMode(5, OUTPUT);
-  pinMode(6, OUTPUT);
-  pinMode(7, OUTPUT);
-  pinMode(8, OUTPUT);
-  pinMode(9, OUTPUT);
-  pinMode(10, OUTPUT);
+  int pinState = 0;
+
+  //for each bit in the byte myDataOut&#xFFFD;
+  //NOTICE THAT WE ARE COUNTING DOWN in our for loop
+  //This means that %00000001 or "1" will go through such
+  //that it will be pin Q0 that lights.
+  for (int i=12; i>=0; i--)  {
+    digitalWrite(clockPin, 0);
+    //if the value passed to myDataOut and a bitmask result
+    // true then... so if we are at i=6 and our value is
+    // %11010100 it would the code compares it to %01000000
+    // and proceeds to set pinState to 1.
+    if (mask & (1<<i)) {
+      pinState = 1;
+    } else {
+      pinState = 0;
+    }
+
+    //Sets the pin to HIGH or LOW depending on pinState
+    digitalWrite(dataPin, pinState);
+    //register shifts bits on upstroke of clock pin
+    digitalWrite(clockPin, 1);
+    //zero the data pin after shift to prevent bleed through
+    digitalWrite(dataPin, 0);
+    // delay(100);
+  }
+
+  //stop shifting
+  digitalWrite(clockPin, 0);
+  digitalWrite(latchPin, 1);
 }
  
-struct Matrix
-{
-  byte *column;
-  byte *rows;
-  byte mode;
-};
-
-struct LED
-{
-  int R; // HIGH or LOW
-  int G; // HIGH or LOW
-  int B; // HIGH or LOW
-};
-
-struct LED White = {LOW, LOW, LOW};
-struct LED Red = {LOW, HIGH, HIGH};
-struct LED Green = {HIGH, LOW, HIGH};
-struct LED Blue = {HIGH, HIGH, LOW};
-struct LED Off = {HIGH, HIGH, HIGH};
-
+ //inspired by the shiftOut method provided on the arduino website here: http://arduino.cc/en/tutorial/ShiftOut
+ void reset(){
+   //turning off the leds.
+   shift_out(latch1, data1, clock1, 0);
+   shift_out(latch1, data1, clock1, 0);
+   delay(500);
+   //turning on the leds.
+   shift_out(latch1, data1, clock1, 4095);
+   shift_out(latch1, data1, clock1, 4095);
+   delay(500);
+   //turning the leds back off.
+   shift_out(latch1, data1, clock1, 0);
+   shift_out(latch1, data1, clock1, 0);
+   clearRegisters();
+ }
 
 /* control bitmasks:
     Mode (LED Colours)|Active Row|Active Column
@@ -76,74 +110,159 @@ struct LED Off = {HIGH, HIGH, HIGH};
     11 = Blue target, rest green
 
     Ideally manager app will just need to send this byte to identify the target appearance
-*/ 
+*/
 
-void toggle_active_row(int active_row) {
-  for (int row = 0; row < 3; row++) {
-    if (row == active_row) {
-      digitalWrite(rowPins[row], HIGH);
-    } else {
-      digitalWrite(rowPins[row], LOW);
+int process_target_pos(byte mask, boolean col) {
+  int idx = 5;
+  if (col) {
+    idx = 2;
+  }
+
+  for (int i=idx; i>=idx-3; i--)  {
+    if (mask & (1<<i)) {
+      return idx - i + 1;
+    }
+  }
+  return 0;
+}
+
+byte WHITE = B00000000;
+byte RED = B00000011;
+byte GREEN = B00000101;
+byte BLUE = B00000110;
+byte OFF = B00000111;
+
+// Derived from ShftOut13 from: https://docs.arduino.cc/tutorials/communication/guide-to-shift-out
+void generate_masks(byte mask, int *generated_masks) {
+  // process mask
+  byte mode = mask >> 6;
+
+  byte target = WHITE;
+  byte others = OFF;
+   if (mode == 1) {
+    target = GREEN;
+    others = RED;
+  } else if (mode == 2) {
+    target = RED;
+    others = BLUE;
+  } else if (mode == 3) {
+    target = BLUE;
+    others = GREEN;
+  }
+
+  int target_col = process_target_pos(mask, true);
+  int target_row = process_target_pos(mask, false);  
+
+  // From this data, we need to compose the 12bit mask, where the first 9 are 3xRGB (for columns 1-3), the last 3 being power for rows 1-3.
+
+  if (target_col == 0 && target_row == 0) {
+    generated_masks[0] = 0;
+    generated_masks[1] = 0;
+    generated_masks[2] = 0;
+  } else {
+    target_col--;
+    target_row--;
+    for (int current_row = 0; current_row < 3; current_row++) {
+      clearRegisters();
+      int pin_out = 0x00;
+
+      if (mode != 0 || current_row == target_row) {
+        pin_out = pin_out | (0x1<<(2-current_row));
+      }
+
+      for (int current_column=2; current_column>=0; current_column--) {
+        if (current_column == target_col && current_row == target_row) {
+          pin_out = pin_out | (target<<(current_column*3)+3);
+        } else {
+          pin_out = pin_out | (others<<(current_column*3)+3);
+        }
+      }
+      generated_masks[current_row] = pin_out;
     }
   }
 }
 
-void multiplex_lights(struct Matrix *mat) {
-  /* What is multiplexing? 
-      - To address an individual LED, need to activate the columns with the appropriate values, then deactivate the row
-  */
+void multiplex_leds(int latchPin, int dataPin, int clockPin, int *masks, int column_idx){
+  clearRegisters();
+  shift_out(latchPin, dataPin, clockPin, masks[column_idx]);
+}
 
-  struct LED target;
-  struct LED others;
+int masks[] = {0,0,0};
+int mask_idx = -1;
 
-  if ((*mat).mode == 0) {
-    target = White;
-    others = Off;
-  } else if ((*mat).mode == 1) {
-    target = Green;
-    others = Red;
-  } else if ((*mat).mode == 2) {
-    target = Red;
-    others = Blue;
-  } else {
-    target = Blue;
-    others = Green;
-  }
-  
-  for (int row = 0; row < 3; row++) {
-    if ((*mat).rows[row] == 1 || (*mat).mode != 0) {
-      toggle_active_row(row);
-      for (int col = 0; col < 3; col++) {
-        if ((*mat).column[col] == 1) {
-          digitalWrite(colPins[col*3], target.R);
-          digitalWrite(colPins[(col*3)+1], target.G);
-          digitalWrite(colPins[(col*3)+2], target.B);
-        } else {
-          digitalWrite(colPins[col*3], others.R);
-          digitalWrite(colPins[(col*3)+1], others.G);
-          digitalWrite(colPins[(col*3)+2], others.B);
-        }
-      }
-    } else { // if no LED to turn on, set row and all columns to off.
-      digitalWrite(colPins[0], LOW);
-      digitalWrite(colPins[1], LOW);
-      digitalWrite(colPins[2], LOW);
-      digitalWrite(colPins[3], LOW);
-      digitalWrite(colPins[4], LOW);
-      digitalWrite(colPins[5], LOW);
-      digitalWrite(rowPins[row], LOW);
-    }
-  }
+byte mode = 0;
+byte position = 0;
+
+void setup(){
+  Serial.begin(9600);
+  // Output to control LED
+  pinMode(data1, OUTPUT);
+  pinMode(clock1, OUTPUT);
+  pinMode(latch1, OUTPUT);
+
+  reset();
 }
 
 void loop() {
-  struct Matrix mat;
-  byte col_mask[] = {0,1,0};
-  byte row_mask[] = {0,1,0};
-  mat.mode = 1;
-  mat.column = col_mask;
-  mat.rows = row_mask;
+  char key = keypad.getKey();
+  if (key) {
+    clearRegisters();
+    switch (key) { // row
+      case '0':
+        mode = 0;
+        position = 0;
+        break;
+      case '1':
+      case '2':
+      case '3':
+        position = B00100000;
+        break;
+      case '4':
+      case '5':
+      case '6':
+        position = B00010000;
+        break;
+      case '7':
+      case '8':
+      case '9':
+        position = B00001000;
+        break;
+      default:
+        if (mode > 2) {
+          mode = 0;
+        } else {
+          mode++;
+        }
+        break;
+    }
+    switch (key) { // column
+      case '1':
+      case '4':
+      case '7':
+        position = position | B00000100;
+        break;
+      case '2':
+      case '5':
+      case '8':
+        position = position | B00000010;
+        break;
+      case '3':
+      case '6':
+      case '9':
+        position = position | B00000001;
+        break;
+      default:
+        break;
+    }
+    generate_masks(position | (mode << 6), masks);
+    mask_idx++;
+  } 
 
-  multiplex_lights(&mat);
-
+  multiplex_leds(latch1, data1, clock1, masks, mask_idx);
+  
+  if (mask_idx > 1) { // want 2 branches of equal time to avoid flicker of LED rows
+    mask_idx = 0;
+  } else {
+    mask_idx++;
+  }
 }
