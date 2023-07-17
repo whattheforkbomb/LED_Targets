@@ -1,30 +1,37 @@
-// #include <Key.h>
-#include <Keypad.h>
+#include <SPI.h>
+#include <Ethernet.h>
 
+// Temp code to update LED via keypad, rather than remote computer.
 // #include <Keypad.h>
-const byte ROWS = 4; //four rows
-const byte COLS = 4; //four columns
-char keys[ROWS][COLS] = {
-  {'1','2','3','A'},
-  {'4','5','6','B'},
-  {'7','8','9','C'},
-  {'*','0','#','D'}
-};
+// const byte ROWS = 4; //four rows
+// const byte COLS = 4; //four columns
+// char keys[ROWS][COLS] = {
+//   {'1','2','3','A'},
+//   {'4','5','6','B'},
+//   {'7','8','9','C'},
+//   {'*','0','#','D'}
+// };
+// byte rowPins[ROWS] = {12, 11, 10, 9}; //connect to the row pinouts of the keypad
+// byte colPins[COLS] = {8, 7, 6, 5}; //connect to the column pinouts of the keypad
+// //Create an object of keypad
+// Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
+// Ethernet supporting code
+byte mac[] = { 0x90, 0xA2, 0xDA, 0x0D, 0xF3, 0xB4 }; //physical mac address
+IPAddress ip(169, 254, 136, 158); // ip in lan
+IPAddress pc_ip(169, 254, 136, 1); // ip in lan
+// EthernetServer server(84); //server port
+
+int ethernet_shield_ethernet_pin = 10;
+int ethernet_shield_sd_pin = 4;
 
 // Shift Register
 //Setting the pin connections for the data pins on the shift registers.
-int data1 = 3;
+int data1 = 1;
 //setting the pins that the clock pins are connected to.
-int clock1 = 4;
+int clock1 = 2;
 //setting the pins that the latch pins are connected to.
-int latch1 = 2;
-
-byte rowPins[ROWS] = {12, 11, 10, 9}; //connect to the row pinouts of the keypad
-byte colPins[COLS] = {8, 7, 6, 5}; //connect to the column pinouts of the keypad
-
-//Create an object of keypad
-Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
+int latch1 = 0;
 
  //clearing the shift registers.
  void clearRegisters(){
@@ -199,15 +206,21 @@ void setup(){
   pinMode(data1, OUTPUT);
   pinMode(clock1, OUTPUT);
   pinMode(latch1, OUTPUT);
+  pinMode(ethernet_shield_ethernet_pin, OUTPUT);
+  pinMode(ethernet_shield_sd_pin, OUTPUT);
+  digitalWrite(ethernet_shield_ethernet_pin, LOW);
+  digitalWrite(ethernet_shield_sd_pin, HIGH);
+  
+  Ethernet.begin(mac, ip);
+  // server.begin();
 
   reset();
 }
 
-void loop() {
-  char key = keypad.getKey();
-  if (key) {
-    clearRegisters();
-    switch (key) { // row
+void process_incoming(int msg) {
+  clearRegisters();
+  char key = msg & 0xFF;
+  switch (key) { // row
       case '0':
         mode = 0;
         position = 0;
@@ -255,14 +268,40 @@ void loop() {
         break;
     }
     generate_masks(position | (mode << 6), masks);
-    mask_idx++;
-  } 
+}
 
-  multiplex_leds(latch1, data1, clock1, masks, mask_idx);
-  
+void loop() {
+  // EthernetClient client = server.available();
+  EthernetClient client;// = server.available();
+  boolean connected = client.connect(pc_ip, 5001);
+  if (connected) {
+    Serial.println("Client connected");
+    // while (client.connected()) {
+    //   if (client.available()) {
+    //     int msg = client.read();
+    //     process_incoming(msg);
+    //     Serial.println("MSG read");
+    //     client.println("HTTP/1.1 200 OK");
+    //     client.println("Content-Type: text/html");
+    //     client.println("Connection: close");  // the connection will be closed after completion of the response
+    //     client.println("Refresh: 5");  // refresh the page automatically every 5 sec
+    //     client.println();
+    //     client.println("<!DOCTYPE HTML>");
+    //     client.println("<html>");
+    //     client.println("</html>");
+    //     break;
+    //   }
+    // }
+    // client.stop();
+    client.write("Hello");
+  } else {
+    Serial.println("No Connection");
+  }
+
   if (mask_idx > 1) { // want 2 branches of equal time to avoid flicker of LED rows
     mask_idx = 0;
   } else {
     mask_idx++;
   }
+  multiplex_leds(latch1, data1, clock1, masks, mask_idx);
 }
