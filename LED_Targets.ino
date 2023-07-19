@@ -1,7 +1,13 @@
-// #include <Key.h>
+#include <Dhcp.h>
+#include <Dns.h>
+#include <Ethernet.h>
+#include <EthernetClient.h>
+#include <EthernetServer.h>
+#include <EthernetUdp.h>
+
+#include <SPI.h>
 #include <Keypad.h>
 
-// #include <Keypad.h>
 const byte ROWS = 4; //four rows
 const byte COLS = 4; //four columns
 char keys[ROWS][COLS] = {
@@ -13,14 +19,10 @@ char keys[ROWS][COLS] = {
 
 
 // Shift Register
-// //Setting the pin connections for the data pins on the shift registers.
-// int data_pin = 4;
-// //setting the pins that the clock pins are connected to.
-// int clock1 = 5;
-// //setting the pins that the latch pins are connected to.
-// int latch1 = 3;
-int shift_pins = 1;
+int shift_pins = 0;
+boolean target_shifted = false;
 
+int array_count = 2;
 int dataPins[] = {1, 4};
 int clockPins[] = {2, 5};
 int latchPins[] = {0, 3};
@@ -30,12 +32,6 @@ byte colPins[COLS] = {9, 8, 7, 6}; //connect to the column pinouts of the keypad
 
 //Create an object of keypad
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
-
- //clearing the shift registers.
- void clearRegisters(int dataPin, int clockPin){
-  digitalWrite(dataPin, 0);
-  digitalWrite(clockPin, 0);
- }
 
  void shift_out(int latchPin, int dataPin, int clockPin, int mask) {
   //internal function setup
@@ -79,77 +75,117 @@ Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
  
  //inspired by the shiftOut method provided on the arduino website here: http://arduino.cc/en/tutorial/ShiftOut
  void reset(){
-   //turning off the leds.
-   shift_out(latchPins[0], dataPins[0], clockPins[0], 0);
-   shift_out(latchPins[0], dataPins[0], clockPins[0], 0);
-   shift_out(latchPins[1], dataPins[1], clockPins[1], 0);
-   shift_out(latchPins[1], dataPins[1], clockPins[1], 0);
-   delay(500);
-   //turning on the leds.
-   shift_out(latchPins[0], dataPins[0], clockPins[0], 4095);
-   shift_out(latchPins[0], dataPins[0], clockPins[0], 4095);
-   shift_out(latchPins[1], dataPins[1], clockPins[1], 4095);
-   shift_out(latchPins[1], dataPins[1], clockPins[1], 4095);
-   delay(500);
-   //turning the leds back off.
-   shift_out(latchPins[0], dataPins[0], clockPins[0], 0);
-   shift_out(latchPins[0], dataPins[0], clockPins[0], 0);
-   shift_out(latchPins[1], dataPins[1], clockPins[1], 0);
-   shift_out(latchPins[1], dataPins[1], clockPins[1], 0);
-   clearRegisters(dataPins[0], clockPins[0]);
-   clearRegisters(dataPins[1], clockPins[1]);
+  //turning off the leds.
+  for (int idx=0; idx < array_count; idx++) {
+    shift_out(latchPins[idx], dataPins[idx], clockPins[idx], 0);
+    shift_out(latchPins[idx], dataPins[idx], clockPins[idx], 0);
+    delayMicroseconds(5000);
+    //turning on the leds.
+    shift_out(latchPins[idx], dataPins[idx], clockPins[idx], 4095);
+    shift_out(latchPins[idx], dataPins[idx], clockPins[idx], 4095);
+    delayMicroseconds(5000);
+    //turning the leds back off.
+    shift_out(latchPins[idx], dataPins[idx], clockPins[idx], 0);
+    shift_out(latchPins[idx], dataPins[idx], clockPins[idx], 0);
+  }
  }
 
 /* control bitmasks:
-    Mode (LED Colours)|Active Row|Active Column
-    00.................000........000           = All off
+    Colour  | Array  | LED
+    |XX|....|XX|.....|XXXX|
 
-    Just Positional:
-    100 100 = Top Left
-    100 010 = Mid Left
-    100 001 = Bottom Left
-    010 100 = Top Mid
-    010 010 = Mid Mid
-    010 001 = Bottom Mid
-    001 100 = Top Right
-    001 010 = Mid Right
-    001 001 = Bottom Right
+    Colour:
+    00.XXXXXX  => Single LED (White?)
+    01.XXXXXX  => Green target, rest red
+    10.XXXXXX  => Red target, rest blue
+    11.XXXXXX  => Blue target, rest green
 
-    Just Modes/Colours
-    00 = Single LED (White?)
-    01 = Green target, rest red
-    10 = Red target, rest blue
-    11 = Blue target, rest green
+    Array:
+    XX.00.XXXX => Top
+    XX.01.XXXX => Mid
+    XX.10.XXXX => Bottom
+
+    Placement: Can compress location into 4 bits
+    0000.0000  => RESET
+    XXXX.0001  => Top Left
+    XXXX.0010  => Top Centre
+    XXXX.0011  => Top Right
+    XXXX.0100  => Mid Left
+    XXXX.0101  => Mid Centre
+    XXXX.0110  => Mid Right
+    XXXX.0111  => Bottom Left
+    XXXX.1000  => Bottom Centre
+    XXXX.1001  => Bottom Right
+    XXXX.1010  => ALL
 
     Ideally manager app will just need to send this byte to identify the target appearance
 */
 
-int process_target_pos(byte mask, boolean col) {
-  int idx = 5;
-  if (col) {
-    idx = 2;
+void process_target_pos(byte mask, int *target_col, int *target_row) {
+  // can skip case of mask == 0, as covered in initial if statement
+  // row
+  switch (mask)
+  {
+    case B00000001:
+    case B00000010:
+    case B00000011:
+      *target_row = 0;
+      break;
+    case B00000100:
+    case B00000101:
+    case B00000110:
+      *target_row = 1;
+      break;
+    case B00000111:
+    case B00001000:
+    case B00001001:
+      *target_row = 2;
+      break;
+    default:
+      break;
   }
-
-  for (int i=idx; i>=idx-3; i--)  {
-    if (mask & (1<<i)) {
-      return idx - i + 1;
-    }
+  // col
+  switch (mask)
+  {
+    case B00000001:
+    case B00000100:
+    case B00000111:
+      *target_col = 0;
+      break;
+    case B00000010:
+    case B00000101:
+    case B00001000:
+      *target_col = 1;
+      break;
+    case B00000011:
+    case B00000110:
+    case B00001001:
+      *target_col = 2;
+      break;
+    default:
+      break;
   }
-  return 0;
 }
 
-byte WHITE =  B00000111;
-byte RED =    B00000100;
-byte GREEN =  B00000010;
-byte BLUE =   B00000001;
-byte OFF =    B00000000;
+byte WHITE  = B00000111;
+byte RED    = B00000001;
+byte GREEN  = B00000010;
+byte BLUE   = B00000100;
+byte OFF    = B00000000;
 
 // Derived from ShftOut13 from: https://docs.arduino.cc/tutorials/communication/guide-to-shift-out
 void generate_masks(byte mask, int *generated_masks) {
+
+  if (mask == 0x0) { // Reset
+    generated_masks[0] = 0;
+    generated_masks[1] = 0;
+    generated_masks[2] = 0;
+    return;
+  }
   // process mask
   byte mode = mask >> 6;
 
-  byte target = WHITE;
+  byte target = RED;
   byte others = OFF;
    if (mode == 1) {
     target = GREEN;
@@ -162,171 +198,102 @@ void generate_masks(byte mask, int *generated_masks) {
     others = GREEN;
   }
 
-  int target_col = process_target_pos(mask, true);
-  int target_row = process_target_pos(mask, false);  
+  int new_shift_pins = (mask >> 4) & 3;
+  target_shifted = new_shift_pins != shift_pins;
+  shift_pins = new_shift_pins;
+
+  int target_col = -1, target_row = -1; // Default all are target
+  process_target_pos(mask & B00001111, &target_col, &target_row); 
 
   // From this data, we need to compose the 12bit mask, where the first 9 are 3xRGB (for columns 1-3), the last 3 being power for rows 1-3.
 
-  if (target_col == 0 && target_row == 0) {
-    generated_masks[0] = 0;
-    generated_masks[1] = 0;
-    generated_masks[2] = 0;
-  } else {
-    target_col--;
-    target_row--;
-    for (int current_row = 0; current_row < 3; current_row++) {
-      int pin_out = 0x00;
+  for (int current_row = 0; current_row < 3; current_row++) {
+    int pin_out = 0x00;
 
-      if (mode != 0 || current_row == target_row) {
-        pin_out = pin_out | (0x1<<(2-current_row));
-      }
-
-      for (int current_column=2; current_column>=0; current_column--) {
-        if (current_column == target_col && current_row == target_row) {
-          pin_out = pin_out | (target<<(current_column*3)+3);
-        } else {
-          pin_out = pin_out | (others<<(current_column*3)+3);
-        }
-      }
-      generated_masks[current_row] = pin_out;
+    if ((target_row == -1) || mode != 0 || current_row == target_row) {
+      pin_out = pin_out | (0x1<<(2-current_row));
     }
+
+    for (int current_column=2; current_column>=0; current_column--) {
+      if ((target_col == -1) || (current_column == target_col && current_row == target_row)) {
+        pin_out = pin_out | (target<<(current_column*3)+3);
+      } else {
+        pin_out = pin_out | (others<<(current_column*3)+3);
+      }
+    }
+    generated_masks[current_row] = pin_out;
   }
+
 }
 
-void multiplex_leds(int latchPin, int dataPin, int clockPin, int *masks, int column_idx){
-  clearRegisters(dataPin, clockPin);
+void multiplex_leds(int latchPin, int dataPin, int clockPin, int *masks, int column_idx) {
+  for (int idx=0; idx<array_count; idx++) {
+    shift_out(latchPins[idx], dataPins[idx], clockPins[idx], 0);
+  }
   shift_out(latchPin, dataPin, clockPin, masks[column_idx]);
 }
 
 int masks[] = {0,0,0};
-int mask_idx = -1;
-
+int mask_idx = 0;
 byte mode = 0;
 byte position = 0;
 
 void setup(){
-  Serial.begin(9600);
+  // Serial.begin(9600);
   // Output to control LED
-  pinMode(dataPins[0], OUTPUT);
-  pinMode(clockPins[0], OUTPUT);
-  pinMode(latchPins[0], OUTPUT);
-  pinMode(dataPins[1], OUTPUT);
-  pinMode(clockPins[1], OUTPUT);
-  pinMode(latchPins[1], OUTPUT);
+  for (int idx=0; idx<array_count; idx++) {
+    pinMode(dataPins[idx], OUTPUT);
+    pinMode(clockPins[idx], OUTPUT);
+    pinMode(latchPins[idx], OUTPUT);
+  }
 
   reset();
 }
 
-void loop() {
+void process_keypad() {
   char key = keypad.getKey();
   if (key) {
-    Serial.println(key);
-    clearRegisters(dataPins[0], clockPins[0]);
-    clearRegisters(dataPins[1], clockPins[1]);
-    // switch (key) { // row
-    //   // case '4':
-    //   case 'A':
-    //     mode = 0;
-    //     position = 0;
-    //     Serial.println("Reset");
-    //     break;
-    //   case 'B':
-    //     if (shift_pins > 0) {
-    //       shift_pins = 0;
-    //     } else {
-    //       shift_pins++;
-    //     }
-    //     Serial.println("Matrix Change");
-    //     break;
-    //   case '1':
-    //   case '2':
-    //   case '3':
-    //     position = B00100000;
-    //     Serial.println("Top Row");
-    //     break;
-    //   case '4':
-    //   case '5':
-    //   case '6':
-    //     position = B00010000;
-    //     Serial.println("Mid Row");
-    //     break;
-    //   case '7':
-    //   case '8':
-    //   case '9':
-    //     position = B00001000;
-    //     Serial.println("Bottom Row");
-    //     break;
-
-    //   default:
-    //     if (mode > 2) {
-    //       mode = 0;
-    //     } else {
-    //       mode++;
-    //     }
-    //     Serial.println("Mode Change");
-    //     break;
-    // }
-    // switch (key) { // column
-    //   case '1':
-    //   case '4':
-    //   case '7':
-    //     position = position | B00000100;
-    //     Serial.println("Left Column");
-    //     break;
-    //   case '2':
-    //   case '5':
-    //   case '8':
-    //     position = position | B00000010;
-    //     Serial.println("centre Column");
-    //     break;
-    //   case '3':
-    //   case '6':
-    //   case '9':
-    //     position = position | B00000001;
-    //     Serial.println("Right Column");
-    //     break;
-    //   default:
-    //     break;
-    // }
-    switch (key) { // row
-      // case '4':
-      case 'A':
-        mode = 0;
-        position = 0;
-        Serial.println("Reset");
+    byte shift_pin = shift_pins;
+    switch (key) {  
+      case 'A': // entire grid
+        if (position == B00001010) {
+          position = 0;
+          mode = 0;
+        } else {
+          position = B00001010;
+        }
         break;
       case 'B':
-        // if (shift_pins > 0) {
-        //   shift_pins = 0;
-        // } else {
-        //   shift_pins++;
-        // }
-        position = B10111111;
-        Serial.println("Matrix Change");
+        reset();
+        if (shift_pin >= array_count-1) {
+          shift_pin = 0;
+        } else {
+          shift_pin++;
+        }
         break;
       case '1':
-        position = B00100100;
+        position = B00000001;
         break;
       case '2':
-        position = B00100010;
+        position = B00000010;
         break;
       case '3':
-        position = B00100001;
+        position = B00000011;
         break;
       case '4':
-        position = B00010100;
+        position = B00000100;
         break;
       case '5':
-        position = B00010010;
+        position = B00000101;
         break;
       case '6':
-        position = B00010001;
+        position = B00000110;
         break;
       case '7':
-        position = B00001100;
+        position = B00000111;
         break;
       case '8':
-        position = B00001010;
+        position = B00001000;
         break;
       case '9':
         position = B00001001;
@@ -337,13 +304,21 @@ void loop() {
         } else {
           mode++;
         }
-        Serial.println("Mode Change");
         break;
     }
 
-    generate_masks(position | (mode << 6), masks);
-    mask_idx++;
+    generate_masks((mode << 6) | (shift_pin << 4) | position, masks);
   } 
+}
+
+// void process_ethernet() {
+
+// }
+
+void loop() {
+  
+  process_keypad();
+  // process_ethernet();
 
   multiplex_leds(latchPins[shift_pins], dataPins[shift_pins], clockPins[shift_pins], masks, mask_idx);
   
@@ -352,4 +327,5 @@ void loop() {
   } else {
     mask_idx++;
   }
+  delayMicroseconds(3000);
 }
